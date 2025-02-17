@@ -1,5 +1,3 @@
-import os
-import pandas as pd
 from Calibrations_analysis import AQCalibrator
 from Graphs_Charts import GraphsCharts
 if __name__ == "__main__":

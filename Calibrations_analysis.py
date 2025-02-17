@@ -1,13 +1,10 @@
-import os
+
 import numpy as np
 import pandas as pd
-import scipy.stats
 from sklearn.linear_model import LinearRegression as lr
 import datetime as dt
 import matplotlib.pyplot as plt
 plt.style.use('seaborn-whitegrid')
-# NYDEC CALIBRATION SCHEME
-# ----USEFUL FOR NON-SUBWAY CALIBRATIONS: INDOOR/OUTDOOR TIME.
 
 
 class AQCalibrator:

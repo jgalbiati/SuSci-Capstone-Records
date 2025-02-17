@@ -1,9 +1,5 @@
 import os
 import numpy as np
-import pandas as pd
-import scipy.stats
-from sklearn.linear_model import LinearRegression as lr
-import datetime as dt
 import matplotlib.pyplot as plt
 
 
