@@ -15,11 +15,12 @@ class AQCalibrator:
         self.df = None
 
     def load_data(self):
-        def utc_delocalize(frame, field, start, end):
+        """Loads and cleans raw data"""
+        def utc_delocalize(frame, field, timestart, timeend):
             """Function to remove timezone awareness from utc datetime fields (for easier manipulation), and to trim
             data to start and end timestamps:"""
             frame[field] = pd.to_datetime(frame[field]).dt.tz_localize(None)
-            frame = frame.loc[(frame[field] >= start) & (frame[field] < end)]
+            frame = frame.loc[(frame[field] >= timestart) & (frame[field] < timeend)]
             frame = frame.set_index(frame[field])
             return frame
 
@@ -36,9 +37,9 @@ class AQCalibrator:
         refdata = pd.read_csv('data/nydec.csv', header=1, parse_dates=[['Date', 'Time']])
         refdata = refdata.rename(columns={"PM25C_ug/m3LC": "PM2.5_ref"})
         
-        # Localize refdata to UTC (then remove timezone awareness)
-        #     refdata's datetime field was captured in Eastern time, but the field is not timezone-aware.
-        #         First set timezone awareness, then convert to UTC:
+        # Localize refdata to UTC (then remove timezone awareness). refdata's datetime field was captured in Eastern
+        #   time, but the field is not timezone-aware.
+        # First set timezone awareness, then convert to UTC:
         refdata['Date_Time'] = refdata['Date_Time'].dt.tz_localize('US/Eastern', ambiguous='NaT')
         refdata['Date_Time'] = refdata['Date_Time'].dt.tz_convert('UTC')
         refdata = utc_delocalize(refdata, 'Date_Time', start, end)
@@ -61,65 +62,63 @@ class AQCalibrator:
         self.df = null_remover(df, df_nulls)
 
     def calibrate_data(self):
-        # statswork for multiple regression
-        # Parameters for regression in X, assume they're predictors for nydec data as y
-        # trained model: nydec = x0 + x1[temp] + x2[humidity] + x3[PA data]
+        """Defines and runs calibration functions"""
+        def reg_out(x):
+            """Calibration Function for all Non-Train/Platform data"""
 
-        # CALIBRATION FUNCTION FOR OUTDOOR/INDOOR (NON-TRAIN/PLATFORM) DATA
-        def reg_out(df, X):
-            X = np.array(df[['Temp', 'Humidity_%', 'PM2.5_test']])
-            y = np.array(df['PM2.5_ref'])
-            reg = lr(fit_intercept=False).fit(X, y)
-            return np.dot(X, reg.coef_)
+            # State-verified data used to calibrate non-subway control figures
+            # trained model: nydec = x0 + x1[temp] + x2[humidity] + x3[PA data]
+            x_training = np.array(self.df[['Temp', 'Humidity_%', 'PM2.5_test']])
+            y = np.array(self.df['PM2.5_ref'])
+            reg = lr(fit_intercept=False).fit(x_training, y)
+            return np.dot(x, reg.coef_)
 
         # CALIBRATION FOR UNDERGROUND PLATFORM & TRAIN DATA
-        def reg_plat():
-            # CALIBRATION SCHEME B
-            # Meant for on the train platforms. Based on mass calculations from air filter collections
+        def reg_plat(x):
+            """Calibration Function for underground platform/train data"""
+
+            # Mass calculations from air filter collections used to train the calibration model
             filt = pd.read_csv('data/Gravcal.csv', header=0)
 
-            X = np.column_stack([np.zeros(len(filt['PA PM2.5 avg'])), filt['PA PM2.5 avg']])
+            x_training = np.column_stack([np.zeros(len(filt['PA PM2.5 avg'])), filt['PA PM2.5 avg']])
             y = np.array(filt['Grav(average)'])
-            calibs = lr(fit_intercept=False).fit(X, y)
-            return calibs.coef_[1] * X
+            calibs = lr(fit_intercept=False).fit(x_training, y)
+            return calibs.coef_[1] * x
         
         # Calibration Scheme C
         # CALIBRATION FOR ABOVEGROUND PLATFORMS AND TRAINS
-        def reg_sir(X):
-            return X * (30.9 / 36.2)
+        def reg_sir(x):
+            """Calibration function for aboveground platform/train data"""
+            return x * (30.9 / 36.2)
 
         df = self.df
         df['PM2.5_calib'] = np.nan
-        # Comprehensive calibration function to calibrate datasets according to location code
 
         def calibrate(frame):
-            # Establish which code gets calibrated how
+            """Runs the calibration functions, based on codes for where data was collected"""
             codes_nydec = ['O', 'I', 'F']
             codes_filter = ['PU', 'T', 'E']
             codes_sir = ['PA']
 
-            # then calibrate based on Loc_code:
-            frame['PM2.5_calib'] = np.nan
+            # nydec calibration for non-subway data
+            x_nydec = frame[['Temp', 'Humidity_%', 'PM2.5']].loc[frame['Loc_code'].isin(codes_nydec)].copy()
+            frame.loc[frame['Loc_code'].isin(codes_nydec), 'PM2.5_calib'] = reg_out(x_nydec)
 
-            # nydec calibration
-            X_nydec = frame[['Temp', 'Humidity_%', 'PM2.5']].loc[frame['Loc_code'].isin(codes_nydec)]
-            frame['PM2.5_calib'].loc[frame['Loc_code'].isin(codes_nydec)] = reg_out(X_nydec)
+            # filter calibration for underground trains/platforms
+            x_filter = frame['PM2.5'].loc[frame['Loc_code'].isin(codes_filter)].copy()
+            frame.loc[frame['Loc_code'].isin(codes_filter), 'PM2.5_calib'] = reg_plat(x_filter)
 
-            # filter calibration
-            X_filter = frame['PM2.5'].loc[frame['Loc_code'].isin(codes_filter)]
-            frame['PM2.5_calib'].loc[frame['Loc_code'].isin(codes_filter)] = reg_plat(X_filter)
+            # Calibration for aboveground plats
+            x_sir = frame['PM2.5'].loc[frame['Loc_code'].isin(codes_sir)].copy()
+            frame.loc[frame['Loc_code'].isin(codes_sir), 'PM2.5_calib'] = reg_sir(x_sir)
 
-            # SIR calibration for aboveground plats
-            X_sir = frame['PM2.5'].loc[frame['Loc_code'].isin(codes_sir)]
-            frame['PM2.5_calib'].loc[frame['Loc_code'].isin(codes_sir)] = reg_sir(X_sir)
-
-            # Special aboveground train calibration using SIR
-            X_sir2 = frame['PM2.5'].loc[(frame['Loc_code'] == 'T') & (frame['Outside? (Y/N)'] == 'Y')]
-            frame['PM2.5_calib'].loc[(frame['Loc_code'] == 'T') & (frame['Outside? (Y/N)'] == 'Y')] = reg_sir(X_sir2)
+            # Calibration for trains traveling aboveground
+            x_sir2 = frame['PM2.5'].loc[(frame['Loc_code'] == 'T') & (frame['Outside? (Y/N)'] == 'Y')].copy()
+            frame.loc[(frame['Loc_code'] == 'T') & (frame['Outside? (Y/N)'] == 'Y'), 'PM2.5_calib'] = reg_sir(x_sir2)
 
             return frame
 
-        # Output dataset with Calibrated PM2.5 field for other codes' analysis
+        # Read in collected data, run calibrations, and write to the Class
         dfsub = pd.read_csv('data/Master_compiled_BB.csv', header=0, parse_dates=[['Date', 'Time_NYC']]).rename(
             columns={'Temperature (F)': 'Temp', 'Humidity (%)': 'Humidity_%', 'PA PM2.5 (um/m3)': 'PM2.5'})
         
